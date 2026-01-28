@@ -1,0 +1,5 @@
+{
+  "name": "GitBrowser AI",
+  "description": "A browser-based Git client using isomorphic-git and lightning-fs, featuring AI-powered repository analysis and code explanation.",
+  "requestFramePermissions": []
+}
