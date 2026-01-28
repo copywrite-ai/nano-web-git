@@ -1,127 +1,140 @@
-
-import git from 'isomorphic-git';
-import http from 'isomorphic-git/http/web';
-import FS from '@isomorphic-git/lightning-fs';
 import { FileNode } from '../types';
 
-class GitService {
-  private fs: any;
-  private pfs: any;
-  private dir = '/repo';
-  private proxy = 'https://cors.isomorphic-git.org';
+export class GitService {
+  private worker: Worker;
+  private pendingRequests: Map<string, {
+    resolve: (val: any) => void,
+    reject: (err: any) => void,
+    onProgress?: (msg: string) => void
+  }> = new Map();
+  private localConnected = false;
+
+  private isReady = false;
+  private readyPromise: Promise<void>;
 
   constructor() {
-    this.fs = new FS('git-browser-fs');
-    this.pfs = this.fs.promises;
+    // @ts-ignore - Vite handled worker import
+    this.worker = new Worker(new URL('./gitWorker.ts', import.meta.url), { type: 'module' });
+    this.worker.onmessage = this.handleWorkerMessage.bind(this);
+    this.worker.onerror = (e) => {
+      console.error('GitWorker Error:', e);
+      this.pendingRequests.forEach(req => req.reject(new Error('Worker crashed')));
+      this.pendingRequests.clear();
+    };
+
+    this.readyPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (!this.isReady) {
+          const msg = 'GitWorker failed to signal ready within 10s. Probable load error.';
+          console.error(msg);
+          reject(new Error(msg));
+        }
+      }, 10000);
+
+      const checkReady = (e: MessageEvent) => {
+        if (e.data.type === 'ready') {
+          console.log('GitWorker Handshake Successful');
+          this.isReady = true;
+          clearTimeout(timeout);
+          this.worker.removeEventListener('message', checkReady);
+          resolve();
+        }
+      };
+      this.worker.addEventListener('message', checkReady);
+    });
+
+    this.initRepo();
+  }
+
+  private handleWorkerMessage(e: MessageEvent) {
+    const { id, type, payload } = e.data;
+    const request = this.pendingRequests.get(id);
+    if (!request) return;
+
+    if (type === 'progress') {
+      request.onProgress?.(payload);
+    } else if (type === 'success') {
+      request.resolve(payload);
+      this.pendingRequests.delete(id);
+    } else if (type === 'error') {
+      request.reject(new Error(payload));
+      this.pendingRequests.delete(id);
+    }
+  }
+
+  private async sendWorkerRequest(type: string, payload?: any, transfers?: Transferable[], onProgress?: (msg: string) => void): Promise<any> {
+    await this.readyPromise;
+    const id = Math.random().toString(36).slice(2);
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error(`Worker request ${type} timed out`));
+        }
+      }, 60000);
+
+      this.pendingRequests.set(id, {
+        resolve: (val) => { clearTimeout(timeout); resolve(val); },
+        reject: (err) => { clearTimeout(timeout); reject(err); },
+        onProgress
+      });
+      this.worker.postMessage({ id, type, payload }, transfers || []);
+    });
+  }
+
+  static parseGitHubUrl(input: string): { url: string; branch: string | null } {
+    const trimmed = input.trim();
+    const treeMatch = trimmed.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)/);
+    if (treeMatch) {
+      return {
+        url: `https://github.com/${treeMatch[1]}/${treeMatch[2]}.git`,
+        branch: treeMatch[3]
+      };
+    }
+    if (trimmed.startsWith('https://github.com/') && !trimmed.endsWith('.git') && trimmed.split('/').length === 5) {
+      return { url: `${trimmed}.git`, branch: null };
+    }
+    return { url: trimmed, branch: null };
   }
 
   async initRepo() {
-    try {
-      await this.pfs.mkdir(this.dir);
-    } catch (e) {
-      // Directory might already exist
-    }
+    return this.sendWorkerRequest('init');
+  }
+
+  useLocalFS(handle: FileSystemDirectoryHandle) {
+    this.localConnected = true;
+    return this.sendWorkerRequest('setLocalRoot', { handle }, [handle as any]);
+  }
+
+  get isLocalConnected() {
+    return this.localConnected;
   }
 
   async clone(url: string, ref: string = 'main', onProgress?: (msg: string) => void) {
-    onProgress?.('Initializing clone...');
-    try {
-      // Clean start for clone
-      const files = await this.pfs.readdir(this.dir);
-      for (const file of files) {
-        await this.recursiveDelete(`${this.dir}/${file}`);
-      }
-    } catch (e) {}
-
-    await git.clone({
-      fs: this.fs,
-      http,
-      dir: this.dir,
-      url,
-      ref,
-      singleBranch: true,
-      depth: 1,
-      corsProxy: this.proxy,
-      onMessage: (msg) => onProgress?.(msg),
-    });
-    onProgress?.('Clone complete!');
+    return this.sendWorkerRequest('clone', { url, ref }, [], onProgress);
   }
 
   async pull(url: string, ref: string = 'main', onProgress?: (msg: string) => void) {
-    onProgress?.('Starting pull...');
-    try {
-      await git.pull({
-        fs: this.fs,
-        http,
-        dir: this.dir,
-        url,
-        ref,
-        singleBranch: true,
-        corsProxy: this.proxy,
-        author: { name: 'Browser User', email: 'user@example.com' }
-      });
-      onProgress?.('Pull complete!');
-    } catch (err: any) {
-      if (err.code === 'NotFoundError') {
-        onProgress?.('Repository not found locally. Performing initial clone instead...');
-        await this.clone(url, ref, onProgress);
-      } else {
-        throw err;
-      }
-    }
+    return this.sendWorkerRequest('pull', { url, ref }, [], onProgress);
   }
 
-  async getFileTree(path: string = this.dir): Promise<FileNode[]> {
-    try {
-      const files = await this.pfs.readdir(path);
-      const nodes: FileNode[] = [];
-
-      for (const file of files) {
-        if (file === '.git') continue;
-        const fullPath = `${path}/${file}`;
-        const stat = await this.pfs.stat(fullPath);
-        
-        if (stat.isDirectory()) {
-          nodes.push({
-            name: file,
-            path: fullPath,
-            type: 'dir',
-            children: await this.getFileTree(fullPath)
-          });
-        } else {
-          nodes.push({
-            name: file,
-            path: fullPath,
-            type: 'file'
-          });
-        }
-      }
-      return nodes.sort((a, b) => {
-        if (a.type === b.type) return a.name.localeCompare(b.name);
-        return a.type === 'dir' ? -1 : 1;
-      });
-    } catch (e) {
-      return [];
-    }
+  async getFileTree(): Promise<FileNode[]> {
+    return this.sendWorkerRequest('getFileTree');
   }
 
   async readFile(path: string): Promise<string> {
-    const content = await this.pfs.readFile(path, 'utf8');
-    return content;
+    return this.sendWorkerRequest('readFile', { path });
   }
 
-  private async recursiveDelete(path: string) {
-    const stat = await this.pfs.stat(path);
-    if (stat.isDirectory()) {
-      const files = await this.pfs.readdir(path);
-      for (const file of files) {
-        await this.recursiveDelete(`${path}/${file}`);
-      }
-      await this.pfs.rmdir(path);
-    } else {
-      await this.pfs.unlink(path);
-    }
+  async syncToLocal(path: string) {
+    return this.sendWorkerRequest('syncToLocal', { path });
   }
+
+  async resetApp() {
+    return this.sendWorkerRequest('wipe');
+  }
+
+  useVirtualFS() { }
 }
 
 export const gitService = new GitService();
