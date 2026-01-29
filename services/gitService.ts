@@ -48,6 +48,13 @@ export class GitService {
 
   private handleWorkerMessage(e: MessageEvent) {
     const { id, type, payload } = e.data;
+
+    // Handle fetch proxy requests from worker
+    if (type === 'EXTENSION_FETCH_PROXY') {
+      this.handleExtensionFetchProxy(id, payload);
+      return;
+    }
+
     const request = this.pendingRequests.get(id);
     if (!request) return;
 
@@ -60,6 +67,74 @@ export class GitService {
       request.reject(new Error(payload));
       this.pendingRequests.delete(id);
     }
+  }
+
+  private async handleExtensionFetchProxy(requestId: string, payload: any) {
+    try {
+      const result = await this.proxyRequestViaExtension(payload);
+      // Transfer the buffer if possible
+      const transfers = result.body?.[0] instanceof Uint8Array ? [result.body[0].buffer] : [];
+      this.worker.postMessage({ id: requestId, type: 'EXTENSION_FETCH_RESULT', payload: result }, transfers as any);
+    } catch (err: any) {
+      this.worker.postMessage({ id: requestId, type: 'EXTENSION_FETCH_RESULT', error: err.message });
+    }
+  }
+
+  private async proxyRequestViaExtension({ url, method, headers, body }: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const id = Math.random().toString(36).slice(2);
+      const handler = (event: MessageEvent) => {
+        if (event.data?.source === 'cors-unblock-content' && event.data?.id === id) {
+          window.removeEventListener('message', handler);
+          if (event.data.error) return reject(new Error(event.data.error));
+
+          const response = event.data.result;
+          let data = response.data;
+
+          if (!(data instanceof Uint8Array)) {
+            if (Array.isArray(data)) {
+              data = new Uint8Array(data);
+            } else if (data && typeof data === 'object' && typeof data.length === 'number') {
+              // Handle serialized object {0:..., 1:..., length:...}
+              const arr = new Uint8Array(data.length);
+              for (let i = 0; i < data.length; i++) {
+                arr[i] = (data as any)[i];
+              }
+              data = arr;
+            } else if (data && typeof data === 'object') {
+              // Fallback for objects without length
+              const values = Object.values(data);
+              data = new Uint8Array(values as number[]);
+            } else {
+              data = new Uint8Array(0);
+            }
+          }
+
+          resolve({
+            url: response.url || url,
+            method,
+            headers: response.headers,
+            body: [data],
+            statusCode: response.status,
+            statusMessage: response.statusText
+          });
+        }
+      };
+
+      window.addEventListener('message', handler);
+      console.log(`[GitService] Proxying ${method} ${url} (${body?.length || 0} bytes body)`);
+      window.postMessage({
+        source: 'cors-unblock-inject',
+        id,
+        type: 'GIT_FETCH',
+        data: { url, method, headers, body }
+      }, '*');
+
+      setTimeout(() => {
+        window.removeEventListener('message', handler);
+        reject(new Error('Extension response timeout'));
+      }, 60000);
+    });
   }
 
   private async sendWorkerRequest(type: string, payload?: any, transfers?: Transferable[], onProgress?: (msg: string) => void): Promise<any> {
@@ -110,12 +185,12 @@ export class GitService {
     return this.localConnected;
   }
 
-  async clone(url: string, ref: string = 'main', onProgress?: (msg: string) => void) {
-    return this.sendWorkerRequest('clone', { url, ref }, [], onProgress);
+  async clone(url: string, ref: string = 'main', useProxy: boolean = false, onProgress?: (msg: string) => void) {
+    return this.sendWorkerRequest('clone', { url, ref, useProxy }, [], onProgress);
   }
 
-  async pull(url: string, ref: string = 'main', onProgress?: (msg: string) => void) {
-    return this.sendWorkerRequest('pull', { url, ref }, [], onProgress);
+  async pull(url: string, ref: string = 'main', useProxy: boolean = false, onProgress?: (msg: string) => void) {
+    return this.sendWorkerRequest('pull', { url, ref, useProxy }, [], onProgress);
   }
 
   async getFileTree(): Promise<FileNode[]> {

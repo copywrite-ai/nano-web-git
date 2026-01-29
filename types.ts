@@ -17,4 +17,5 @@ export interface RepoState {
   branch: string;
   isCloning: boolean;
   error: string | null;
+  useProxy: boolean;
 }

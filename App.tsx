@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { 
-  Github, 
-  FolderOpen, 
-  FileText, 
-  Terminal, 
-  Download, 
-  RefreshCw, 
-  ChevronRight, 
+import {
+  Github,
+  FolderOpen,
+  FileText,
+  Terminal,
+  Download,
+  RefreshCw,
+  ChevronRight,
   ChevronDown,
   Sparkles,
   Loader2,
@@ -48,7 +48,7 @@ npm run build`;
             <X className="w-5 h-5" />
           </button>
         </div>
-        
+
         <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
           <section>
             <h3 className="text-blue-400 text-sm font-bold uppercase tracking-wider mb-3">1. 准备工作 (Prerequisites)</h3>
@@ -61,7 +61,7 @@ npm run build`;
               <pre className="bg-black p-4 rounded-lg font-mono text-sm text-zinc-300 border border-zinc-800">
                 <code>npm install</code>
               </pre>
-              <button 
+              <button
                 onClick={() => copyToClipboard('npm install')}
                 className="absolute top-2 right-2 p-2 bg-zinc-800 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
               >
@@ -90,7 +90,7 @@ npm run build`;
         </div>
 
         <div className="p-4 bg-zinc-950 border-t border-zinc-800 flex justify-end">
-          <button 
+          <button
             onClick={onClose}
             className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg text-sm font-bold transition-all"
           >
@@ -102,21 +102,32 @@ npm run build`;
   );
 };
 
-const TreeNode: React.FC<{ 
-  node: FileNode; 
-  depth?: number; 
-  onFileClick: (path: string) => void;
-}> = ({ node, depth = 0, onFileClick }) => {
+const TreeNode: React.FC<{
+  node: FileNode;
+  depth?: number;
+  isSelected: boolean;
+  onFileClick: (path: string, isMulti: boolean) => void;
+  onContextMenu: (e: React.MouseEvent, path: string) => void;
+}> = ({ node, depth = 0, isSelected, onFileClick, onContextMenu }) => {
   const [isOpen, setIsOpen] = useState(false);
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onContextMenu(e, node.path);
+  };
 
   if (node.type === 'file') {
     return (
-      <button 
-        onClick={() => onFileClick(node.path)}
-        className="flex items-center w-full px-2 py-1 text-sm text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors"
+      <button
+        onClick={(e) => onFileClick(node.path, e.metaKey || e.ctrlKey)}
+        onContextMenu={handleContextMenu}
+        className={`flex items-center w-full px-2 py-1 text-sm rounded transition-colors ${isSelected
+            ? 'bg-blue-600/30 text-white border-l-2 border-blue-500'
+            : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+          }`}
         style={{ paddingLeft: `${depth * 1.2 + 0.5}rem` }}
       >
-        <FileText className="w-3.5 h-3.5 mr-2 shrink-0 opacity-60" />
+        <FileText className={`w-3.5 h-3.5 mr-2 shrink-0 ${isSelected ? 'text-blue-400' : 'opacity-60'}`} />
         <span className="truncate">{node.name}</span>
       </button>
     );
@@ -124,9 +135,11 @@ const TreeNode: React.FC<{
 
   return (
     <div>
-      <button 
+      <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center w-full px-2 py-1 text-sm text-zinc-300 hover:text-white hover:bg-zinc-800 rounded transition-colors group"
+        onContextMenu={handleContextMenu}
+        className={`flex items-center w-full px-2 py-1 text-sm hover:bg-zinc-800 rounded transition-colors group ${isSelected ? 'bg-blue-600/10 text-white' : 'text-zinc-300 hover:text-white'
+          }`}
         style={{ paddingLeft: `${depth * 1.2 + 0.5}rem` }}
       >
         {isOpen ? (
@@ -134,13 +147,20 @@ const TreeNode: React.FC<{
         ) : (
           <ChevronRight className="w-3.5 h-3.5 mr-2 shrink-0 text-zinc-500" />
         )}
-        <FolderOpen className="w-3.5 h-3.5 mr-2 shrink-0 text-blue-400 opacity-70 group-hover:opacity-100" />
+        <FolderOpen className={`w-3.5 h-3.5 mr-2 shrink-0 opacity-70 group-hover:opacity-100 ${isSelected ? 'text-blue-400' : 'text-blue-400'}`} />
         <span className="truncate font-medium">{node.name}</span>
       </button>
       {isOpen && node.children && (
         <div className="mt-0.5">
           {node.children.map(child => (
-            <TreeNode key={child.path} node={child} depth={depth + 1} onFileClick={onFileClick} />
+            <TreeNode
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              isSelected={isSelected} // Folders can also be "selected" for sync if we want, but usually it's files
+              onFileClick={onFileClick}
+              onContextMenu={onContextMenu}
+            />
           ))}
         </div>
       )}
@@ -154,10 +174,15 @@ const App: React.FC = () => {
     branch: 'main',
     isCloning: false,
     error: null,
+    useProxy: false,
   });
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [selectedFile, setSelectedFile] = useState<{ path: string; content: string } | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [localRootHandle, setLocalRootHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, path: string } | null>(null);
+
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
   const [activeTab, setActiveTab] = useState<'code' | 'logs'>('code');
@@ -184,18 +209,18 @@ const App: React.FC = () => {
     setRepoState(prev => ({ ...prev, isCloning: true, error: null }));
     setActiveTab('logs');
     addLog(`${action === 'clone' ? 'Cloning' : 'Pulling'} ${repoState.url}...`, 'info');
-    
+
     try {
       await gitService.initRepo();
       if (action === 'clone') {
-        await gitService.clone(repoState.url, repoState.branch, (msg) => addLog(msg, 'info'));
+        await gitService.clone(repoState.url, repoState.branch, repoState.useProxy, (msg) => addLog(msg, 'info'));
       } else {
-        await gitService.pull(repoState.url, repoState.branch, (msg) => addLog(msg, 'info'));
+        await gitService.pull(repoState.url, repoState.branch, repoState.useProxy, (msg) => addLog(msg, 'info'));
       }
-      
+
       addLog(`Success: Repository ${action === 'clone' ? 'cloned' : 'updated'}!`, 'success');
       await refreshTree();
-      
+
       if (action === 'clone' || fileTree.length === 0) {
         const tree = await gitService.getFileTree();
         const fileNames = tree.slice(0, 10).map(n => n.name);
@@ -213,14 +238,66 @@ const App: React.FC = () => {
     }
   };
 
-  const handleFileClick = async (path: string) => {
+  const handleFileClick = async (path: string, isMulti: boolean) => {
+    if (isMulti) {
+      setSelectedPaths(prev => {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path);
+        else next.add(path);
+        return next;
+      });
+    } else {
+      setSelectedPaths(new Set([path]));
+      try {
+        const content = await gitService.readFile(path);
+        setSelectedFile({ path, content });
+        setAiExplanation(null);
+        setActiveTab('code');
+      } catch (err) {
+        addLog(`Failed to read file: ${path}`, 'error');
+      }
+    }
+  };
+
+  const handleMapLocalFolder = async () => {
     try {
-      const content = await gitService.readFile(path);
-      setSelectedFile({ path, content });
-      setAiExplanation(null);
-      setActiveTab('code');
-    } catch (err) {
-      addLog(`Failed to read file: ${path}`, 'error');
+      const handle = await (window as any).showDirectoryPicker();
+      setLocalRootHandle(handle);
+      await gitService.useLocalFS(handle);
+      addLog(`Mapped local folder: ${handle.name}`, 'success');
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        addLog(`Failed to map local folder: ${err.message}`, 'error');
+      }
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, path: string) => {
+    setContextMenu({ x: e.clientX, y: e.clientY, path });
+  };
+
+  const handleSyncToLocal = async () => {
+    if (!localRootHandle) {
+      addLog('Please map a local folder first!', 'error');
+      setContextMenu(null);
+      return;
+    }
+
+    const pathsToSync = selectedPaths.has(contextMenu!.path)
+      ? Array.from(selectedPaths)
+      : [contextMenu!.path];
+
+    setContextMenu(null);
+    addLog(`Syncing ${pathsToSync.length} items to local folder...`, 'info');
+
+    try {
+      for (const path of pathsToSync) {
+        await gitService.syncToLocal(path);
+        addLog(`Synced: ${path.replace('/repo/', '')}`, 'success');
+      }
+      addLog('Synchronization completed!', 'success');
+    } catch (err: any) {
+      addLog(`Sync failed: ${err.message}`, 'error');
     }
   };
 
@@ -238,9 +315,26 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-zinc-950">
+    <div className="flex flex-col h-screen overflow-hidden bg-zinc-950" onClick={() => setContextMenu(null)}>
       {/* Build Guide Modal */}
       <BuildGuideModal isOpen={isBuildGuideOpen} onClose={() => setIsBuildGuideOpen(false)} />
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-[100] bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl py-1 min-w-[160px]"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={e => e.stopPropagation()}
+        >
+          <button
+            onClick={handleSyncToLocal}
+            className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-zinc-200 hover:bg-blue-600 hover:text-white transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Sync to Local</span>
+          </button>
+        </div>
+      )}
 
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 bg-zinc-900 border-b border-zinc-800 shrink-0 z-10 shadow-2xl">
@@ -255,26 +349,41 @@ const App: React.FC = () => {
             <p className="text-[10px] text-zinc-500 mt-1 uppercase tracking-widest font-semibold">Web-Based Git Client</p>
           </div>
         </div>
-        
+
         <div className="flex items-center space-x-3 flex-1 max-w-4xl px-8">
           <div className="relative flex-1 group">
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={repoState.url}
-              onChange={(e) => setRepoState(p => ({...p, url: e.target.value}))}
+              onChange={(e) => setRepoState(p => ({ ...p, url: e.target.value }))}
               placeholder="https://github.com/user/repo"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-4 pr-4 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all placeholder:text-zinc-600"
             />
           </div>
-          <input 
-            type="text" 
+          <input
+            type="text"
             value={repoState.branch}
-            onChange={(e) => setRepoState(p => ({...p, branch: e.target.value}))}
+            onChange={(e) => setRepoState(p => ({ ...p, branch: e.target.value }))}
             placeholder="main"
             className="w-24 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-center"
           />
+          <div className="flex items-center space-x-2 px-2 shrink-0">
+            <label className="flex items-center space-x-2 cursor-pointer group">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={repoState.useProxy}
+                  onChange={(e) => setRepoState(p => ({ ...p, useProxy: e.target.checked }))}
+                  className="sr-only"
+                />
+                <div className={`w-8 h-4 rounded-full transition-colors ${repoState.useProxy ? 'bg-blue-600' : 'bg-zinc-700'}`} />
+                <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${repoState.useProxy ? 'translate-x-4' : ''}`} />
+              </div>
+              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter group-hover:text-zinc-300 transition-colors">CORS Proxy</span>
+            </label>
+          </div>
           <div className="flex space-x-2 shrink-0">
-            <button 
+            <button
               onClick={() => handleAction('clone')}
               disabled={repoState.isCloning}
               className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 shadow-lg shadow-blue-500/10"
@@ -282,7 +391,7 @@ const App: React.FC = () => {
               {repoState.isCloning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
               <span>Clone</span>
             </button>
-            <button 
+            <button
               onClick={() => handleAction('pull')}
               disabled={repoState.isCloning}
               className="flex items-center space-x-2 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-200 px-4 py-2 rounded-lg text-sm font-semibold border border-zinc-700 transition-all active:scale-95"
@@ -291,7 +400,20 @@ const App: React.FC = () => {
               <span>Pull</span>
             </button>
             <div className="w-px h-8 bg-zinc-800 mx-1" />
-            <button 
+
+            <button
+              onClick={handleMapLocalFolder}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 border ${localRootHandle
+                  ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-400 hover:bg-emerald-600/30'
+                  : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                }`}
+              title={localRootHandle ? `Mapped to ${localRootHandle.name}` : 'Map Local Folder'}
+            >
+              <FolderOpen className="w-4 h-4" />
+              <span>{localRootHandle ? localRootHandle.name : 'Map Local'}</span>
+            </button>
+
+            <button
               onClick={() => setIsBuildGuideOpen(true)}
               className="flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-zinc-800 p-2 rounded-lg transition-all border border-transparent hover:border-zinc-700"
               title="Local Build Guide"
@@ -321,7 +443,13 @@ const App: React.FC = () => {
               </div>
             )}
             {fileTree.map(node => (
-              <TreeNode key={node.path} node={node} onFileClick={handleFileClick} />
+              <TreeNode
+                key={node.path}
+                node={node}
+                isSelected={selectedPaths.has(node.path)}
+                onFileClick={handleFileClick}
+                onContextMenu={handleContextMenu}
+              />
             ))}
           </div>
         </aside>
@@ -330,14 +458,14 @@ const App: React.FC = () => {
         <div className="flex-1 flex flex-col overflow-hidden bg-zinc-900 relative">
           {/* Tabs */}
           <div className="flex items-center px-4 bg-zinc-900 border-b border-zinc-800 h-10 shrink-0">
-            <button 
+            <button
               onClick={() => setActiveTab('code')}
               className={`flex items-center space-x-2 px-4 h-full text-xs font-medium border-b-2 transition-colors ${activeTab === 'code' ? 'border-blue-500 text-white bg-zinc-800/50' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
             >
               <Code2 className="w-3.5 h-3.5" />
               <span>Source Viewer</span>
             </button>
-            <button 
+            <button
               onClick={() => setActiveTab('logs')}
               className={`flex items-center space-x-2 px-4 h-full text-xs font-medium border-b-2 transition-colors ${activeTab === 'logs' ? 'border-blue-500 text-white bg-zinc-800/50' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
             >
@@ -355,7 +483,7 @@ const App: React.FC = () => {
                       <FileText className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                       <span className="text-xs text-zinc-400 font-mono truncate">{selectedFile.path.replace('/repo/', '')}</span>
                     </div>
-                    <button 
+                    <button
                       onClick={handleExplain}
                       disabled={isExplaining}
                       className="flex items-center space-x-2 text-[10px] uppercase tracking-wider font-bold bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 text-white px-3 py-1.5 rounded-md transition-all shadow-lg active:scale-95"
@@ -364,12 +492,12 @@ const App: React.FC = () => {
                       <span>Ask AI to Explain</span>
                     </button>
                   </div>
-                  
+
                   <div className="flex-1 flex overflow-hidden">
                     <pre className="flex-1 p-6 overflow-auto text-sm font-mono text-zinc-300 selection:bg-blue-500/40 custom-scrollbar leading-relaxed">
                       <code>{selectedFile.content}</code>
                     </pre>
-                    
+
                     {/* AI Panel */}
                     {aiExplanation && (
                       <div className="w-[400px] border-l border-zinc-800 bg-zinc-950 flex flex-col animate-in slide-in-from-right duration-500 shadow-2xl">
@@ -378,7 +506,7 @@ const App: React.FC = () => {
                             <Sparkles className="w-4 h-4" />
                             <h3 className="text-xs font-bold uppercase tracking-widest">AI Explanation</h3>
                           </div>
-                          <button 
+                          <button
                             onClick={() => setAiExplanation(null)}
                             className="text-zinc-600 hover:text-zinc-400"
                           >
@@ -434,7 +562,7 @@ const App: React.FC = () => {
               </div>
             )}
           </div>
-          
+
           {/* Status Bar */}
           <footer className="h-6 bg-blue-600 border-t border-blue-500 shrink-0 flex items-center px-4 justify-between text-[10px] text-blue-100 font-medium">
             <div className="flex items-center space-x-4">
