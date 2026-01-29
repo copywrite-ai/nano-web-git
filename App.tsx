@@ -122,8 +122,8 @@ const TreeNode: React.FC<{
         onClick={(e) => onFileClick(node.path, e.metaKey || e.ctrlKey)}
         onContextMenu={handleContextMenu}
         className={`flex items-center w-full px-2 py-1 text-sm rounded transition-colors ${isSelected
-            ? 'bg-blue-600/30 text-white border-l-2 border-blue-500'
-            : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+          ? 'bg-blue-600/30 text-white border-l-2 border-blue-500'
+          : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
           }`}
         style={{ paddingLeft: `${depth * 1.2 + 0.5}rem` }}
       >
@@ -350,8 +350,8 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center space-x-3 flex-1 max-w-4xl px-8">
-          <div className="relative flex-1 group">
+        <div className="flex items-center space-x-3 flex-1 max-w-7xl px-8">
+          <div className="relative flex-1 group min-w-[600px]">
             <input
               type="text"
               value={repoState.url}
@@ -404,8 +404,8 @@ const App: React.FC = () => {
             <button
               onClick={handleMapLocalFolder}
               className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 border ${localRootHandle
-                  ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-400 hover:bg-emerald-600/30'
-                  : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-400 hover:bg-emerald-600/30'
+                : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
                 }`}
               title={localRootHandle ? `Mapped to ${localRootHandle.name}` : 'Map Local Folder'}
             >
