@@ -215,6 +215,53 @@ async function countFiles(vPath: string): Promise<number> {
     return count;
 }
 
+async function calculateHash(data: ArrayBuffer): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function isConsistent(vPath: string, relPath: string): Promise<boolean> {
+    try {
+        const vData = await pfs.readFile(vPath);
+        const lHandle = await getLocalHandle(relPath, { type: 'file' }) as FileSystemFileHandle;
+        const lFile = await lHandle.getFile();
+
+        if (lFile.size !== (vData as Uint8Array).length) return false;
+
+        const lData = await lFile.arrayBuffer();
+        const [vHash, lHash] = await Promise.all([
+            calculateHash(vData.buffer as ArrayBuffer),
+            calculateHash(lData as ArrayBuffer)
+        ]);
+
+        return vHash === lHash;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function cleanupLocal(relPath: string = '') {
+    const lHandle = await getLocalHandle(relPath, { type: 'dir' }) as FileSystemDirectoryHandle;
+    // Iterate over local files/folders
+    for await (const [name, handle] of (lHandle as any).entries()) {
+        const childRelPath = relPath ? `${relPath}/${name}` : name;
+        const vPath = `${dir}/${childRelPath}`;
+
+        try {
+            await pfs.stat(vPath);
+            // Exists in virtual, recurse if directory
+            if (handle.kind === 'directory') {
+                await cleanupLocal(childRelPath);
+            }
+        } catch (e) {
+            // Not in virtual, delete local
+            console.log(`[Worker] Cleaning up extra local item: ${childRelPath}`);
+            await lHandle.removeEntry(name, { recursive: true });
+        }
+    }
+}
+
 // Signal ready
 self.postMessage({ type: 'ready' });
 
@@ -310,10 +357,19 @@ self.onmessage = async (e) => {
                         const files = await pfs.readdir(vPath);
                         for (const file of files) await sync(`${vPath}/${file}`);
                     } else {
-                        const data = await pfs.readFile(vPath);
                         const handle = await getLocalHandle(relPath, { create: true, type: 'file' }) as FileSystemFileHandle;
                         const writable = await handle.createWritable();
-                        await writable.write(data as any);
+
+                        // Consistency check for incremental sync
+                        const consistent = await isConsistent(vPath, relPath);
+                        if (consistent) {
+                            console.log(`[Worker] Skipping consistent file: ${relPath}`);
+                        } else {
+                            const data = await pfs.readFile(vPath);
+                            await writable.write(data as any);
+                            console.log(`[Worker] Updated: ${relPath}`);
+                        }
+
                         await writable.close();
                         currentFiles++;
                         self.postMessage({
@@ -324,6 +380,13 @@ self.onmessage = async (e) => {
                     }
                 };
                 await sync(payload.path);
+
+                // Mirror logic: cleanup files that don't exist in virtual repo
+                if (payload.path === dir) {
+                    console.log(`[Worker] Starting mirror cleanup...`);
+                    await cleanupLocal();
+                }
+
                 console.log(`Sync finished`);
                 self.postMessage({ id, type: 'success' });
                 break;
