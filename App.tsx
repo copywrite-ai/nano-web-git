@@ -185,6 +185,7 @@ const App: React.FC = () => {
 
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [activeTab, setActiveTab] = useState<'code' | 'logs'>('code');
   const [isBuildGuideOpen, setIsBuildGuideOpen] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -314,6 +315,21 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSyncAll = async () => {
+    if (!localRootHandle) return;
+    setIsSyncingAll(true);
+    setActiveTab('logs');
+    addLog(`Starting full synchronization to ${localRootHandle.name}...`, 'info');
+    try {
+      await gitService.syncAll();
+      addLog('Full synchronization completed successfully!', 'success');
+    } catch (err: any) {
+      addLog(`Full sync failed: ${err.message}`, 'error');
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-zinc-950" onClick={() => setContextMenu(null)}>
       {/* Build Guide Modal */}
@@ -350,8 +366,8 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center space-x-3 flex-1 max-w-7xl px-8">
-          <div className="relative flex-1 group min-w-[600px]">
+        <div className="flex items-center space-x-2 md:space-x-3 flex-1 max-w-7xl px-2 md:px-8 overflow-hidden">
+          <div className="relative flex-[2] group min-w-0">
             <input
               type="text"
               value={repoState.url}
@@ -370,7 +386,7 @@ const App: React.FC = () => {
             placeholder="main"
             className="w-24 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-center"
           />
-          <div className="flex items-center space-x-2 px-2 shrink-0">
+          <div className="flex items-center space-x-2 px-1 shrink-0">
             <label className="flex items-center space-x-2 cursor-pointer group">
               <div className="relative">
                 <input
@@ -379,30 +395,30 @@ const App: React.FC = () => {
                   onChange={(e) => setRepoState(p => ({ ...p, useProxy: e.target.checked }))}
                   className="sr-only"
                 />
-                <div className={`w-8 h-4 rounded-full transition-colors ${repoState.useProxy ? 'bg-blue-600' : 'bg-zinc-700'}`} />
-                <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${repoState.useProxy ? 'translate-x-4' : ''}`} />
+                <div className={`w-7 h-3.5 rounded-full transition-colors ${repoState.useProxy ? 'bg-blue-600' : 'bg-zinc-700'}`} />
+                <div className={`absolute top-0.5 left-0.5 w-2.5 h-2.5 bg-white rounded-full transition-transform ${repoState.useProxy ? 'translate-x-3.5' : ''}`} />
               </div>
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter group-hover:text-zinc-300 transition-colors">CORS Proxy</span>
+              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-tighter group-hover:text-zinc-300 transition-colors hidden sm:inline">CORS Proxy</span>
             </label>
           </div>
           <div className="flex space-x-2 shrink-0">
             <button
               onClick={() => handleAction('clone')}
               disabled={repoState.isCloning}
-              className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 shadow-lg shadow-blue-500/10"
+              className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-3 md:px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 shadow-lg shadow-blue-500/10"
             >
               {repoState.isCloning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              <span>Clone</span>
+              <span className="hidden md:inline">Clone</span>
             </button>
             <button
               onClick={() => handleAction('pull')}
               disabled={repoState.isCloning}
-              className="flex items-center space-x-2 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-200 px-4 py-2 rounded-lg text-sm font-semibold border border-zinc-700 transition-all active:scale-95"
+              className="flex items-center space-x-2 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-200 px-3 md:px-4 py-2 rounded-lg text-sm font-semibold border border-zinc-700 transition-all active:scale-95"
             >
               <GitPullRequest className="w-4 h-4" />
-              <span>Pull</span>
+              <span className="hidden md:inline">Pull</span>
             </button>
-            <div className="w-px h-8 bg-zinc-800 mx-1" />
+            <div className="w-px h-8 bg-zinc-800 mx-0.5 hidden sm:block" />
 
             <button
               onClick={handleMapLocalFolder}
@@ -415,6 +431,17 @@ const App: React.FC = () => {
               <FolderOpen className="w-4 h-4" />
               <span>{localRootHandle ? localRootHandle.name : 'Map Local'}</span>
             </button>
+
+            {localRootHandle && (
+              <button
+                onClick={handleSyncAll}
+                disabled={isSyncingAll || repoState.isCloning}
+                className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-3 md:px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 shadow-lg shadow-emerald-500/10"
+              >
+                {isSyncingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                <span className="hidden md:inline">Sync All</span>
+              </button>
+            )}
 
             <button
               onClick={() => setIsBuildGuideOpen(true)}

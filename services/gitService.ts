@@ -146,7 +146,7 @@ export class GitService {
           this.pendingRequests.delete(id);
           reject(new Error(`Worker request ${type} timed out`));
         }
-      }, 60000);
+      }, 300000); // Increased to 5 minutes for large clones/syncs
 
       this.pendingRequests.set(id, {
         resolve: (val) => { clearTimeout(timeout); resolve(val); },
@@ -221,6 +221,10 @@ export class GitService {
 
   async syncToLocal(path: string) {
     return this.sendWorkerRequest('syncToLocal', { path });
+  }
+
+  async syncAll() {
+    return this.syncToLocal('/repo');
   }
 
   async resetApp() {
