@@ -19,7 +19,7 @@ import {
   Copy,
   Check
 } from 'lucide-react';
-import { gitService } from './services/gitService';
+import { gitService, GitService } from './services/gitService';
 import { explainCode, summarizeRepo } from './services/geminiService';
 import { FileNode, LogEntry, RepoState } from './types';
 
@@ -170,7 +170,7 @@ const TreeNode: React.FC<{
 
 const App: React.FC = () => {
   const [repoState, setRepoState] = useState<RepoState>({
-    url: 'https://github.com/isomorphic-git/isomorphic-git',
+    url: 'https://github.com/copywrite-ai/nano-web-git',
     branch: 'main',
     isCloning: false,
     error: null,
@@ -261,7 +261,7 @@ const App: React.FC = () => {
 
   const handleMapLocalFolder = async () => {
     try {
-      const handle = await (window as any).showDirectoryPicker();
+      const handle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
       setLocalRootHandle(handle);
       await gitService.useLocalFS(handle);
       addLog(`Mapped local folder: ${handle.name}`, 'success');
@@ -355,7 +355,10 @@ const App: React.FC = () => {
             <input
               type="text"
               value={repoState.url}
-              onChange={(e) => setRepoState(p => ({ ...p, url: e.target.value }))}
+              onChange={(e) => {
+                const { url, branch } = GitService.parseGitUrl(e.target.value);
+                setRepoState(p => ({ ...p, url, branch: branch || p.branch }));
+              }}
               placeholder="https://github.com/user/repo"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-4 pr-4 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all placeholder:text-zinc-600"
             />

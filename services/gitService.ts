@@ -157,18 +157,36 @@ export class GitService {
     });
   }
 
-  static parseGitHubUrl(input: string): { url: string; branch: string | null } {
+  static parseGitUrl(input: string): { url: string; branch: string | null } {
     const trimmed = input.trim();
-    const treeMatch = trimmed.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)/);
-    if (treeMatch) {
+
+    // GitHub: https://github.com/user/repo/tree/branch
+    const ghTreeMatch = trimmed.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)/);
+    if (ghTreeMatch) {
       return {
-        url: `https://github.com/${treeMatch[1]}/${treeMatch[2]}.git`,
-        branch: treeMatch[3]
+        url: `https://github.com/${ghTreeMatch[1]}/${ghTreeMatch[2]}.git`,
+        branch: ghTreeMatch[3]
       };
     }
-    if (trimmed.startsWith('https://github.com/') && !trimmed.endsWith('.git') && trimmed.split('/').length === 5) {
+
+    // Gitee: https://gitee.com/user/repo/tree/branch
+    const giteeTreeMatch = trimmed.match(/^https:\/\/gitee\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)/);
+    if (giteeTreeMatch) {
+      return {
+        url: `https://gitee.com/${giteeTreeMatch[1]}/${giteeTreeMatch[2]}.git`,
+        branch: giteeTreeMatch[3]
+      };
+    }
+
+    // Normal GitHub/Gitee repo URL (auto-append .git if missing)
+    if (
+      (trimmed.startsWith('https://github.com/') || trimmed.startsWith('https://gitee.com/')) &&
+      !trimmed.endsWith('.git') &&
+      trimmed.split('/').length === 5
+    ) {
       return { url: `${trimmed}.git`, branch: null };
     }
+
     return { url: trimmed, branch: null };
   }
 
@@ -178,7 +196,7 @@ export class GitService {
 
   useLocalFS(handle: FileSystemDirectoryHandle) {
     this.localConnected = true;
-    return this.sendWorkerRequest('setLocalRoot', { handle }, [handle as any]);
+    return this.sendWorkerRequest('setLocalRoot', { handle }, []);
   }
 
   get isLocalConnected() {
