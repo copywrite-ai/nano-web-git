@@ -204,6 +204,17 @@ async function getLocalHandle(path: string, options: { create?: boolean; type?: 
     return current;
 }
 
+async function countFiles(vPath: string): Promise<number> {
+    const stat = await pfs.stat(vPath);
+    if (!stat.isDirectory()) return 1;
+    const files = await pfs.readdir(vPath);
+    let count = 0;
+    for (const file of files) {
+        count += await countFiles(`${vPath}/${file}`);
+    }
+    return count;
+}
+
 // Signal ready
 self.postMessage({ type: 'ready' });
 
@@ -288,6 +299,9 @@ self.onmessage = async (e) => {
 
             case 'syncToLocal':
                 console.log(`Syncing ${payload.path} to local`);
+                const totalFiles = await countFiles(payload.path);
+                let currentFiles = 0;
+
                 const sync = async (vPath: string) => {
                     const relPath = vPath.startsWith(dir) ? vPath.slice(dir.length).replace(/^\/+/, '') : vPath.replace(/^\/+/, '');
                     const stat = await pfs.stat(vPath);
@@ -301,6 +315,12 @@ self.onmessage = async (e) => {
                         const writable = await handle.createWritable();
                         await writable.write(data as any);
                         await writable.close();
+                        currentFiles++;
+                        self.postMessage({
+                            id,
+                            type: 'progress',
+                            payload: { type: 'sync', current: currentFiles, total: totalFiles, path: relPath }
+                        });
                     }
                 };
                 await sync(payload.path);

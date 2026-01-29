@@ -219,12 +219,12 @@ export class GitService {
     return this.sendWorkerRequest('readFile', { path });
   }
 
-  async syncToLocal(path: string) {
-    return this.sendWorkerRequest('syncToLocal', { path });
+  async syncToLocal(path: string, onProgress?: (payload: any) => void) {
+    return this.sendWorkerRequest('syncToLocal', { path }, [], onProgress);
   }
 
-  async syncAll() {
-    return this.syncToLocal('/repo');
+  async syncAll(onProgress?: (payload: any) => void) {
+    return this.syncToLocal('/repo', onProgress);
   }
 
   async resetApp() {

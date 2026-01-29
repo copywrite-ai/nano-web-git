@@ -186,6 +186,7 @@ const App: React.FC = () => {
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<{ current: number; total: number; path: string } | null>(null);
   const [activeTab, setActiveTab] = useState<'code' | 'logs'>('code');
   const [isBuildGuideOpen, setIsBuildGuideOpen] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -290,15 +291,24 @@ const App: React.FC = () => {
 
     setContextMenu(null);
     addLog(`Syncing ${pathsToSync.length} items to local folder...`, 'info');
+    setSyncProgress({ current: 0, total: pathsToSync.length, path: 'Starting...' });
 
     try {
-      for (const path of pathsToSync) {
-        await gitService.syncToLocal(path);
+      for (let i = 0; i < pathsToSync.length; i++) {
+        const path = pathsToSync[i];
+        await gitService.syncToLocal(path, (payload) => {
+          if (payload.type === 'sync') {
+            // For single file/folder sync, the notification is internal
+          }
+        });
+        setSyncProgress({ current: i + 1, total: pathsToSync.length, path: path.replace('/repo/', '') });
         addLog(`Synced: ${path.replace('/repo/', '')}`, 'success');
       }
       addLog('Synchronization completed!', 'success');
     } catch (err: any) {
       addLog(`Sync failed: ${err.message}`, 'error');
+    } finally {
+      setSyncProgress(null);
     }
   };
 
@@ -321,12 +331,17 @@ const App: React.FC = () => {
     setActiveTab('logs');
     addLog(`Starting full synchronization to ${localRootHandle.name}...`, 'info');
     try {
-      await gitService.syncAll();
+      await gitService.syncAll((payload) => {
+        if (payload.type === 'sync') {
+          setSyncProgress(payload);
+        }
+      });
       addLog('Full synchronization completed successfully!', 'success');
     } catch (err: any) {
       addLog(`Full sync failed: ${err.message}`, 'error');
     } finally {
       setIsSyncingAll(false);
+      setTimeout(() => setSyncProgress(null), 2000);
     }
   };
 
@@ -594,7 +609,20 @@ const App: React.FC = () => {
           </div>
 
           {/* Status Bar */}
-          <footer className="h-6 bg-blue-600 border-t border-blue-500 shrink-0 flex items-center px-4 justify-between text-[10px] text-blue-100 font-medium">
+          <footer className="h-6 bg-blue-600 border-t border-blue-500 shrink-0 flex items-center px-4 justify-between text-[10px] text-blue-100 font-medium relative">
+            {syncProgress && (
+              <div className="absolute inset-0 bg-blue-700/50 flex items-center px-4 z-20">
+                <div className="flex-1 h-1.5 bg-blue-900/50 rounded-full overflow-hidden mr-4">
+                  <div
+                    className="h-full bg-emerald-400 transition-all duration-300 ease-out"
+                    style={{ width: `${Math.round((syncProgress.current / syncProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <span className="shrink-0 font-mono">
+                  {Math.round((syncProgress.current / syncProgress.total) * 100)}% ({syncProgress.current}/{syncProgress.total}) - {syncProgress.path}
+                </span>
+              </div>
+            )}
             <div className="flex items-center space-x-4">
               <span className="flex items-center space-x-1.5">
                 <RefreshCw className={`w-3 h-3 ${repoState.isCloning ? 'animate-spin' : ''}`} />
