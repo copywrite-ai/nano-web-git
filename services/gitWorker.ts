@@ -221,23 +221,54 @@ async function calculateHash(data: ArrayBuffer): Promise<string> {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function isConsistent(vPath: string, relPath: string): Promise<boolean> {
+/**
+ * Fast consistency check: returns { consistent: boolean, vData?: Uint8Array }
+ * If not consistent, returns the virtual file data so we don't have to read it again
+ */
+async function checkConsistency(vPath: string, relPath: string): Promise<{ consistent: boolean; vData?: Uint8Array }> {
     try {
-        const vData = await pfs.readFile(vPath);
-        const lHandle = await getLocalHandle(relPath, { type: 'file' }) as FileSystemFileHandle;
+        const vData = await pfs.readFile(vPath) as Uint8Array;
+
+        let lHandle: FileSystemFileHandle;
+        try {
+            lHandle = await getLocalHandle(relPath, { type: 'file' }) as FileSystemFileHandle;
+        } catch (e) {
+            // Local file doesn't exist
+            return { consistent: false, vData };
+        }
+
         const lFile = await lHandle.getFile();
 
-        if (lFile.size !== (vData as Uint8Array).length) return false;
+        // Fast path: size mismatch means definitely not consistent
+        if (lFile.size !== vData.length) {
+            return { consistent: false, vData };
+        }
 
+        // For small files (<10KB), compare bytes directly (faster than hash)
+        if (vData.length < 10240) {
+            const lData = new Uint8Array(await lFile.arrayBuffer());
+            for (let i = 0; i < vData.length; i++) {
+                if (vData[i] !== lData[i]) return { consistent: false, vData };
+            }
+            return { consistent: true };
+        }
+
+        // For larger files, use hash comparison
         const lData = await lFile.arrayBuffer();
         const [vHash, lHash] = await Promise.all([
             calculateHash(vData.buffer as ArrayBuffer),
             calculateHash(lData as ArrayBuffer)
         ]);
 
-        return vHash === lHash;
+        return { consistent: vHash === lHash, vData: vHash === lHash ? undefined : vData };
     } catch (e) {
-        return false;
+        // Any error means we need to sync
+        try {
+            const vData = await pfs.readFile(vPath) as Uint8Array;
+            return { consistent: false, vData };
+        } catch {
+            return { consistent: true }; // Virtual file doesn't exist, skip
+        }
     }
 }
 
@@ -348,38 +379,61 @@ self.onmessage = async (e) => {
                 console.log(`Syncing ${payload.path} to local`);
                 const totalFiles = await countFiles(payload.path);
                 let currentFiles = 0;
+                let skippedFiles = 0;
+                let updatedFiles = 0;
+                const CONCURRENCY = 10; // Process 10 files in parallel
 
-                const sync = async (vPath: string) => {
+                // Collect all files first
+                const collectFiles = async (vPath: string): Promise<{ vPath: string; relPath: string }[]> => {
                     const relPath = vPath.startsWith(dir) ? vPath.slice(dir.length).replace(/^\/+/, '') : vPath.replace(/^\/+/, '');
                     const stat = await pfs.stat(vPath);
                     if (stat.isDirectory()) {
-                        await getLocalHandle(relPath, { create: true, type: 'dir' });
+                        // Ensure directory exists locally
+                        if (relPath) await getLocalHandle(relPath, { create: true, type: 'dir' });
                         const files = await pfs.readdir(vPath);
-                        for (const file of files) await sync(`${vPath}/${file}`);
-                    } else {
-                        const handle = await getLocalHandle(relPath, { create: true, type: 'file' }) as FileSystemFileHandle;
-                        const writable = await handle.createWritable();
-
-                        // Consistency check for incremental sync
-                        const consistent = await isConsistent(vPath, relPath);
-                        if (consistent) {
-                            console.log(`[Worker] Skipping consistent file: ${relPath}`);
-                        } else {
-                            const data = await pfs.readFile(vPath);
-                            await writable.write(data as any);
-                            console.log(`[Worker] Updated: ${relPath}`);
+                        const results: { vPath: string; relPath: string }[] = [];
+                        for (const file of files) {
+                            if (file === '.git') continue;
+                            results.push(...await collectFiles(`${vPath}/${file}`));
                         }
-
-                        await writable.close();
-                        currentFiles++;
-                        self.postMessage({
-                            id,
-                            type: 'progress',
-                            payload: { type: 'sync', current: currentFiles, total: totalFiles, path: relPath }
-                        });
+                        return results;
+                    } else {
+                        return [{ vPath, relPath }];
                     }
                 };
-                await sync(payload.path);
+
+                // Sync a single file
+                const syncFile = async (vPath: string, relPath: string) => {
+                    // Check consistency BEFORE creating writable
+                    const { consistent, vData } = await checkConsistency(vPath, relPath);
+
+                    if (consistent) {
+                        skippedFiles++;
+                    } else {
+                        // Only create writable when we need to write
+                        const handle = await getLocalHandle(relPath, { create: true, type: 'file' }) as FileSystemFileHandle;
+                        const writable = await handle.createWritable();
+                        await writable.write(vData as any);
+                        await writable.close();
+                        updatedFiles++;
+                    }
+
+                    currentFiles++;
+                    self.postMessage({
+                        id,
+                        type: 'progress',
+                        payload: { type: 'sync', current: currentFiles, total: totalFiles, path: relPath, skipped: skippedFiles, updated: updatedFiles }
+                    });
+                };
+
+                // Process files in parallel batches
+                const allFiles = await collectFiles(payload.path);
+                console.log(`[Worker] Collected ${allFiles.length} files to sync`);
+
+                for (let i = 0; i < allFiles.length; i += CONCURRENCY) {
+                    const batch = allFiles.slice(i, i + CONCURRENCY);
+                    await Promise.all(batch.map(f => syncFile(f.vPath, f.relPath)));
+                }
 
                 // Mirror logic: cleanup files that don't exist in virtual repo
                 if (payload.path === dir) {
@@ -387,7 +441,7 @@ self.onmessage = async (e) => {
                     await cleanupLocal();
                 }
 
-                console.log(`Sync finished`);
+                console.log(`[Worker] Sync finished: ${updatedFiles} updated, ${skippedFiles} skipped`);
                 self.postMessage({ id, type: 'success' });
                 break;
 
